@@ -1,0 +1,224 @@
+name: 🚀 Build & Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'  # Triggers on semantic version tags like v1.0.0
+  pull_request:
+    branches: [main, master]
+    paths:
+      - 'src/**'
+      - 'Dockerfile'
+      - '.dockerignore'
+      - '.github/workflows/**'
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  # 🧪 Test Job - Runs on PRs and releases
+  test:
+    name: 🧪 Run Tests
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🔧 Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: 📦 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: src/WebhookApp/ClientApp/package-lock.json
+
+      - name: 📦 Install .NET dependencies
+        run: dotnet restore src/WebhookApp/WebhookApp.csproj
+
+      - name: 📦 Install Node.js dependencies
+        working-directory: src/WebhookApp/ClientApp
+        run: npm ci
+
+      - name: 🏗️ Build .NET application
+        run: dotnet build src/WebhookApp/WebhookApp.csproj --no-restore --configuration Release
+
+      - name: 🏗️ Build Vue.js frontend
+        working-directory: src/WebhookApp/ClientApp
+        run: npm run build
+
+      - name: 🧪 Run .NET tests
+        run: dotnet test src/WebhookApp/WebhookApp.csproj --no-build --configuration Release --verbosity normal
+
+      - name: 🔍 Check health endpoint compilation
+        run: |
+          # Verify the health endpoint compiles correctly
+          dotnet build src/WebhookApp/WebhookApp.csproj --configuration Release --verbosity minimal
+          echo "✅ Health endpoint and application compiled successfully"
+
+  # 🐳 Build & Push Docker Image - Only on tag releases
+  build-and-push:
+    name: 🐳 Build & Push Docker Image
+    runs-on: ubuntu-latest
+    needs: test
+    if: startsWith(github.ref, 'refs/tags/v')
+    outputs:
+      image-tag: ${{ steps.meta.outputs.tags }}
+      version: ${{ steps.get-version.outputs.version }}
+      
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🏷️ Get version from tag
+        id: get-version
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/}
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "📦 Building version: ${VERSION}"
+
+      - name: 🔐 Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 🏷️ Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: 🔧 Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 🐳 Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: 🔍 Security scan with Trivy
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.get-version.outputs.version }}
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+
+      - name: 📤 Upload Trivy scan results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'trivy-results.sarif'
+
+  # 📋 Create GitHub Release
+  create-release:
+    name: 📋 Create GitHub Release
+    runs-on: ubuntu-latest
+    needs: [test, build-and-push]
+    if: startsWith(github.ref, 'refs/tags/v')
+    
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Fetch full history for changelog
+
+      - name: 🏷️ Get version from tag
+        id: get-version
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/}
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+
+      - name: 📝 Generate changelog
+        id: changelog
+        run: |
+          # Generate changelog between tags
+          PREVIOUS_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          if [ -n "$PREVIOUS_TAG" ]; then
+            CHANGELOG=$(git log --pretty=format:"- %s (%h)" ${PREVIOUS_TAG}..HEAD)
+          else
+            CHANGELOG=$(git log --pretty=format:"- %s (%h)" HEAD)
+          fi
+          
+          # Create release notes
+          cat > release-notes.md << EOF
+          ## 🚀 Webhook Monitor ${{ steps.get-version.outputs.version }}
+          
+          ### 📦 Docker Image
+          \`\`\`bash
+          docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.get-version.outputs.version }}
+          \`\`\`
+          
+          ### 🎯 Helm Chart
+          The Helm chart will be updated automatically in the [webhook-monitor-helm](https://github.com/${{ github.repository_owner }}/webhook-monitor-helm) repository.
+          
+          ### 📋 Changes
+          ${CHANGELOG}
+          
+          ### 🔗 Links
+          - 🐳 [Container Image](${{ env.REGISTRY }}/${{ env.IMAGE_NAME }})
+          - ⎈ [Helm Repository](https://${{ github.repository_owner }}.github.io/webhook-monitor-helm/)
+          - 📚 [Documentation](./README.md)
+          EOF
+
+      - name: 🎉 Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ steps.get-version.outputs.version }}
+          name: "Webhook Monitor ${{ steps.get-version.outputs.version }}"
+          body_path: release-notes.md
+          draft: false
+          prerelease: ${{ contains(steps.get-version.outputs.version, '-') }}
+          generate_release_notes: true
+
+  # 🔄 Trigger Helm Repository Update
+  trigger-helm-update:
+    name: 🔄 Update Helm Chart
+    runs-on: ubuntu-latest
+    needs: [build-and-push, create-release]
+    if: startsWith(github.ref, 'refs/tags/v')
+    
+    steps:
+      - name: 🏷️ Get version from tag
+        id: get-version
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/}
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+
+      - name: 🚀 Trigger Helm repository update
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.HELM_REPO_TOKEN }}
+          repository: ${{ github.repository_owner }}/webhook-monitor-helm
+          event-type: update-chart
+          client-payload: |
+            {
+              "version": "${{ steps.get-version.outputs.version }}",
+              "image": "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.get-version.outputs.version }}",
+              "source_repo": "${{ github.repository }}",
+              "source_sha": "${{ github.sha }}",
+              "release_url": "${{ github.server_url }}/${{ github.repository }}/releases/tag/${{ steps.get-version.outputs.version }}"
+            }
+
+      - name: ✅ Helm update triggered
+        run: |
+          echo "🎯 Successfully triggered Helm chart update for version ${{ steps.get-version.outputs.version }}"
+          echo "📍 Helm repository: https://github.com/${{ github.repository_owner }}/webhook-monitor-helm"
+          echo "🔗 Monitor the PR creation at: https://github.com/${{ github.repository_owner }}/webhook-monitor-helm/pulls"

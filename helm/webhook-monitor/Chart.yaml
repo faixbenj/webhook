@@ -1,0 +1,21 @@
+apiVersion: v2
+name: webhook-monitor
+description: A real-time webhook monitoring application with Vue.js frontend and SignalR
+type: application
+version: 0.1.0
+appVersion: "v0.1.0"
+home: https://github.com/YOUR-USERNAME/webhook-monitor
+sources:
+  - https://github.com/YOUR-USERNAME/webhook-monitor
+  - https://github.com/YOUR-USERNAME/webhook-monitor-helm
+maintainers:
+  - name: YOUR-USERNAME
+    url: https://github.com/YOUR-USERNAME
+keywords:
+  - webhook
+  - monitoring
+  - signalr
+  - vue
+  - real-time
+annotations:
+  category: Monitoring
