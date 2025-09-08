@@ -167,14 +167,14 @@ jobs:
           \`\`\`
           
           ### 🎯 Helm Chart
-          The Helm chart will be updated automatically in the [webhook-monitor-helm](https://github.com/${{ github.repository_owner }}/webhook-monitor-helm) repository.
+          The Helm chart will be updated automatically in the [webhook-helm-repo](https://github.com/${{ github.repository_owner }}/webhook-helm-repo) repository.
           
           ### 📋 Changes
           ${CHANGELOG}
           
           ### 🔗 Links
           - 🐳 [Container Image](${{ env.REGISTRY }}/${{ env.IMAGE_NAME }})
-          - ⎈ [Helm Repository](https://${{ github.repository_owner }}.github.io/webhook-monitor-helm/)
+          - ⎈ [Helm Repository](https://${{ github.repository_owner }}.github.io/webhook-helm-repo/)
           - 📚 [Documentation](./README.md)
           EOF
 
@@ -206,7 +206,7 @@ jobs:
         uses: peter-evans/repository-dispatch@v3
         with:
           token: ${{ secrets.HELM_REPO_TOKEN }}
-          repository: ${{ github.repository_owner }}/webhook-monitor-helm
+          repository: ${{ github.repository_owner }}/webhook-helm-repo
           event-type: update-chart
           client-payload: |
             {
@@ -220,5 +220,5 @@ jobs:
       - name: ✅ Helm update triggered
         run: |
           echo "🎯 Successfully triggered Helm chart update for version ${{ steps.get-version.outputs.version }}"
-          echo "📍 Helm repository: https://github.com/${{ github.repository_owner }}/webhook-monitor-helm"
-          echo "🔗 Monitor the PR creation at: https://github.com/${{ github.repository_owner }}/webhook-monitor-helm/pulls"
+          echo "📍 Helm repository: https://github.com/${{ github.repository_owner }}/webhook-helm-repo"
+          echo "🔗 Monitor the PR creation at: https://github.com/${{ github.repository_owner }}/webhook-helm-repo/pulls"
